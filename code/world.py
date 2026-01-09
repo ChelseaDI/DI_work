@@ -46,6 +46,14 @@ config['decay'] = args.decay
 config['pretrain'] = args.pretrain
 config['A_split'] = False
 config['bigdata'] = False
+config['group_size'] = 3000
+config['n_clusters'] = 1000
+config['server_topk'] = 50
+config['cluster_alpha'] = 0.1
+
+config['global_rounds'] = 20
+config['local_epochs'] = 10
+config['load_pretrain'] = True
 
 GPU = torch.cuda.is_available()
 device = torch.device('cuda' if GPU else "cpu")

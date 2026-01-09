@@ -105,12 +105,24 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
     torch.manual_seed(seed)
 
-def getFileName():
+# def getFileName():
+#     if world.model_name == 'mf':
+#         file = f"mf-{world.dataset}-{world.config['latent_dim_rec']}.pth.tar"
+#     elif world.model_name == 'lgn':
+#         file = f"lgn-{world.dataset}-{world.config['lightGCN_n_layers']}-{world.config['latent_dim_rec']}.pth.tar"
+#     return os.path.join(world.FILE_PATH,file)
+
+def getFileName(model=None):
     if world.model_name == 'mf':
-        file = f"mf-{world.dataset}-{world.config['latent_dim_rec']}.pth.tar"
+        base = f"mf-{world.dataset}-{world.config['latent_dim_rec']}"
     elif world.model_name == 'lgn':
-        file = f"lgn-{world.dataset}-{world.config['lightGCN_n_layers']}-{world.config['latent_dim_rec']}.pth.tar"
-    return os.path.join(world.FILE_PATH,file)
+        base = f"lgn-{world.dataset}-{world.config['lightGCN_n_layers']}-{world.config['latent_dim_rec']}"
+    file = base + ".pth.tar"
+    # 如果是分组模型，放入 group_id 文件夹
+    if model is not None and getattr(model, "group_id", None) is not None:
+        return os.path.join(world.FILE_PATH, "group" + str(model.group_id), file)
+    return os.path.join(world.FILE_PATH, file)
+
 
 def minibatch(*tensors, **kwargs):
 

@@ -86,7 +86,9 @@ class LightGCN(BasicModel):
                  dataset:BasicDataset):
         super(LightGCN, self).__init__()
         self.config = config
-        self.dataset : dataloader.BasicDataset = dataset
+        self.dataset : BasicDataset = dataset
+        self.group_id = getattr(dataset, "group_id", None)
+        self.global_item_emb = None
         self.__init_weight()
 
     def __init_weight(self):
@@ -97,9 +99,9 @@ class LightGCN(BasicModel):
         self.keep_prob = self.config['keep_prob']
         self.A_split = self.config['A_split']
         self.embedding_user = torch.nn.Embedding(
-            num_embeddings=self.num_users, embedding_dim=self.latent_dim)
+            num_embeddings=self.num_users, embedding_dim=self.latent_dim)       # 用户embedding U
         self.embedding_item = torch.nn.Embedding(
-            num_embeddings=self.num_items, embedding_dim=self.latent_dim)
+            num_embeddings=self.num_items, embedding_dim=self.latent_dim)       # 用于建模物品本身的表示，对应矩阵分解里的物品矩阵 V
         if self.config['pretrain'] == 0:
 #             nn.init.xavier_uniform_(self.embedding_user.weight, gain=1)
 #             nn.init.xavier_uniform_(self.embedding_item.weight, gain=1)
@@ -119,10 +121,10 @@ class LightGCN(BasicModel):
         # print("save_txt")
     def __dropout_x(self, x, keep_prob):
         size = x.size()
-        index = x.indices().t()
+        index = x.indices().t()             # 获取非零元素的坐标 [num_edges, 2]
         values = x.values()
         random_index = torch.rand(len(values)) + keep_prob
-        random_index = random_index.int().bool()
+        random_index = random_index.int().bool()                 # 掩码，[1,num_edges]
         index = index[random_index]
         values = values[random_index]/keep_prob
         g = torch.sparse.FloatTensor(index.t(), values, size)
@@ -145,7 +147,7 @@ class LightGCN(BasicModel):
         items_emb = self.embedding_item.weight
         all_emb = torch.cat([users_emb, items_emb])
         #   torch.split(all_emb , [self.num_users, self.num_items])
-        embs = [all_emb]
+        embs = [all_emb]            # 张量不可迭代，转成列表
         if self.config['dropout']:
             if self.training:
                 print("droping")
@@ -163,20 +165,30 @@ class LightGCN(BasicModel):
                 side_emb = torch.cat(temp_emb, dim=0)
                 all_emb = side_emb
             else:
-                all_emb = torch.sparse.mm(g_droped, all_emb)
-            embs.append(all_emb)
+                all_emb = torch.sparse.mm(g_droped, all_emb)        # 卷积：交互矩阵 * embedding矩阵, E_(i+1) = A * E_i
+            embs.append(all_emb)        # [ [E0], [E1], ...]，list[embedding,...]
         embs = torch.stack(embs, dim=1)
         #print(embs.size())
-        light_out = torch.mean(embs, dim=1)
+        light_out = torch.mean(embs, dim=1)     # 各节点 embedding = 各层 embedding 求和后平均
         users, items = torch.split(light_out, [self.num_users, self.num_items])
         return users, items
     
-    def getUsersRating(self, users):
+    # def getUsersRating(self, users):
+    #     all_users, all_items = self.computer()
+    #     users_emb = all_users[users.long()]
+    #     items_emb = all_items
+    #     rating = self.f(torch.matmul(users_emb, items_emb.t()))
+    #     return rating
+    def getUsersRating(self, users, use_global_item=False):
         all_users, all_items = self.computer()
         users_emb = all_users[users.long()]
-        items_emb = all_items
+        if use_global_item and self.global_item_emb is not None:
+            items_emb = self.global_item_emb.to(users_emb.device)
+        else:
+            items_emb = all_items
         rating = self.f(torch.matmul(users_emb, items_emb.t()))
         return rating
+
     
     def getEmbedding(self, users, pos_items, neg_items):
         all_users, all_items = self.computer()
@@ -210,6 +222,6 @@ class LightGCN(BasicModel):
         #all_users, all_items = self.computer()
         users_emb = all_users[users]
         items_emb = all_items[items]
-        inner_pro = torch.mul(users_emb, items_emb)
-        gamma     = torch.sum(inner_pro, dim=1)
+        inner_pro = torch.mul(users_emb, items_emb)     # 逐元素相乘
+        gamma     = torch.sum(inner_pro, dim=1)         # u 对 i 的评分
         return gamma

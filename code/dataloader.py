@@ -139,9 +139,10 @@ class LastFM(BasicDataset):
 
     def getSparseGraph(self):
         if self.Graph is None:
-            user_dim = torch.LongTensor(self.trainUser)
-            item_dim = torch.LongTensor(self.trainItem)
-            
+            # user_dim = torch.LongTensor(self.trainUser)
+            # item_dim = torch.LongTensor(self.trainItem)
+            user_dim = torch.tensor(self.trainUser, dtype=torch.long)
+            item_dim = torch.tensor(self.trainItem, dtype=torch.long)
             first_sub = torch.stack([user_dim, item_dim + self.n_users])
             second_sub = torch.stack([item_dim+self.n_users, user_dim])
             index = torch.cat([first_sub, second_sub], dim=1)
@@ -245,7 +246,7 @@ class Loader(BasicDataset):
                     items = [int(i) for i in l[1:]]
                     uid = int(l[0])
                     trainUniqueUsers.append(uid)
-                    trainUser.extend([uid] * len(items))
+                    trainUser.extend([uid] * len(items))    # [0,0,0,1,1,2,2,2,2,2,3,3,3...]
                     trainItem.extend(items)
                     self.m_item = max(self.m_item, max(items))
                     self.n_user = max(self.n_user, uid)
@@ -266,7 +267,7 @@ class Loader(BasicDataset):
                     self.m_item = max(self.m_item, max(items))
                     self.n_user = max(self.n_user, uid)
                     self.testDataSize += len(items)
-        self.m_item += 1
+        self.m_item += 1    # id 转 用户数
         self.n_user += 1
         self.testUniqueUsers = np.array(testUniqueUsers)
         self.testUser = np.array(testUser)
@@ -279,8 +280,8 @@ class Loader(BasicDataset):
 
         # (users,items), bipartite graph
         self.UserItemNet = csr_matrix((np.ones(len(self.trainUser)), (self.trainUser, self.trainItem)),
-                                      shape=(self.n_user, self.m_item))
-        self.users_D = np.array(self.UserItemNet.sum(axis=1)).squeeze()
+                                      shape=(self.n_user, self.m_item))     # 稀疏矩阵（值，坐标，矩阵大小）
+        self.users_D = np.array(self.UserItemNet.sum(axis=1)).squeeze()     # (n_user, 1) squeeze-> (n_user,) 用户交互物品数量
         self.users_D[self.users_D == 0.] = 1
         self.items_D = np.array(self.UserItemNet.sum(axis=0)).squeeze()
         self.items_D[self.items_D == 0.] = 1.
@@ -327,7 +328,7 @@ class Loader(BasicDataset):
         col = torch.Tensor(coo.col).long()
         index = torch.stack([row, col])
         data = torch.FloatTensor(coo.data)
-        return torch.sparse.FloatTensor(index, data, torch.Size(coo.shape))
+        return torch.sparse_coo_tensor(index, data, torch.Size(coo.shape))
         
     def getSparseGraph(self):
         print("loading adjacency matrix")
@@ -357,6 +358,8 @@ class Loader(BasicDataset):
                 norm_adj = norm_adj.tocsr()
                 end = time()
                 print(f"costing {end-s}s, saved norm_mat...")
+                if not os.path.exists(self.path):
+                    os.makedirs(self.path, exist_ok=True)
                 sp.save_npz(self.path + '/s_pre_adj_mat.npz', norm_adj)
 
             if self.split == True:

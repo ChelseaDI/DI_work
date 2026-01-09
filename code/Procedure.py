@@ -25,7 +25,7 @@ CORES = multiprocessing.cpu_count() // 2
 
 def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None):
     Recmodel = recommend_model
-    Recmodel.train()
+    Recmodel.train()        # 把模型切换成训练模式
     bpr: utils.BPRLoss = loss_class
     
     with timer(name="Sample"):
@@ -47,7 +47,7 @@ def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=N
                                                    posItems,
                                                    negItems,
                                                    batch_size=world.config['bpr_batch_size'])):
-        cri = bpr.stageOne(batch_users, batch_pos, batch_neg)
+        cri = bpr.stageOne(batch_users, batch_pos, batch_neg)       # 计算loss，计算梯度，更新参数
         aver_loss += cri
         if world.tensorboard:
             w.add_scalar(f'BPRLoss/BPR', cri, epoch * int(len(users) / world.config['bpr_batch_size']) + batch_i)
@@ -72,7 +72,7 @@ def test_one_batch(X):
             'ndcg':np.array(ndcg)}
         
             
-def Test(dataset, Recmodel, epoch, w=None, multicore=0):
+def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False):
     u_batch_size = world.config['test_u_batch_size']
     dataset: utils.BasicDataset
     testDict: dict = dataset.testDict
@@ -88,7 +88,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
     with torch.no_grad():
         users = list(testDict.keys())
         try:
-            assert u_batch_size <= len(users) / 10
+            assert u_batch_size <= len(users) / 10      # 至少分十组
         except AssertionError:
             print(f"test_u_batch_size is too big for this dataset, try a small one {len(users) // 10}")
         users_list = []
@@ -100,18 +100,20 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
         for batch_users in utils.minibatch(users, batch_size=u_batch_size):
             allPos = dataset.getUserPosItems(batch_users)
             groundTrue = [testDict[u] for u in batch_users]
-            batch_users_gpu = torch.Tensor(batch_users).long()
+            batch_users_gpu = torch.Tensor(batch_users).long()      # 将用户ID移到GPU
             batch_users_gpu = batch_users_gpu.to(world.device)
 
-            rating = Recmodel.getUsersRating(batch_users_gpu)
+            rating = Recmodel.getUsersRating(batch_users_gpu, use_global_item)       # 获取用户评分预测
             #rating = rating.cpu()
+            # 排除已交互物品
             exclude_index = []
             exclude_items = []
             for range_i, items in enumerate(allPos):
                 exclude_index.extend([range_i] * len(items))
                 exclude_items.extend(items)
-            rating[exclude_index, exclude_items] = -(1<<10)
-            _, rating_K = torch.topk(rating, k=max_K)
+            rating[exclude_index, exclude_items] = -(1<<10)         # 将已交互物品的评分置为负无穷
+            _, rating_K = torch.topk(rating, k=max_K)               # 获取Top-K推荐
+            # 数据转移和清理
             rating = rating.cpu().numpy()
             # aucs = [ 
             #         utils.AUC(rating[i],
@@ -123,7 +125,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
             users_list.append(batch_users)
             rating_list.append(rating_K.cpu())
             groundTrue_list.append(groundTrue)
-        assert total_batch == len(users_list)
+        assert total_batch == len(users_list)           # 这代码不就纯纯有毛病么，必须得有余数才行
         X = zip(rating_list, groundTrue_list)
         if multicore == 1:
             pre_results = pool.map(test_one_batch, X)
