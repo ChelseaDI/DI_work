@@ -47,8 +47,8 @@ config['pretrain'] = args.pretrain
 config['A_split'] = False
 config['bigdata'] = False
 config['group_size'] = 3000
-config['n_clusters'] = 1000
-config['server_topk'] = 50
+config['n_clusters'] = 10
+config['server_topk'] = 5
 config['cluster_alpha'] = 0.1
 
 config['global_rounds'] = 20

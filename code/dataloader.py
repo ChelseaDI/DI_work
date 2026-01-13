@@ -245,15 +245,29 @@ class Loader(BasicDataset):
                     l = l.strip('\n').split(' ')
                     items = [int(i) for i in l[1:]]
                     uid = int(l[0])
-                    trainUniqueUsers.append(uid)
+                    # trainUniqueUsers.append(uid)
                     trainUser.extend([uid] * len(items))    # [0,0,0,1,1,2,2,2,2,2,3,3,3...]
                     trainItem.extend(items)
                     self.m_item = max(self.m_item, max(items))
                     self.n_user = max(self.n_user, uid)
                     self.traindataSize += len(items)
-        self.trainUniqueUsers = np.array(trainUniqueUsers)
-        self.trainUser = np.array(trainUser)
-        self.trainItem = np.array(trainItem)
+        self.trainUser_all = np.array(trainUser)
+        self.trainItem_all = np.array(trainItem)       
+        # self.trainUniqueUsers = np.array(trainUniqueUsers)
+        # self.trainUser = np.array(trainUser)
+        # self.trainItem = np.array(trainItem)
+
+        # Divide train and validation
+        trainData = pd.DataFrame({'user':trainUser, 'item':trainItem})          # 用户，物品 对
+        val = trainData.sample(frac=0.1, replace=False, random_state=2022)      # 从训练集中抽取 10% 作为验证集（validation set）
+        val.sort_index(inplace=True)
+        trainData.drop(val.index, inplace=True)
+        self.trainUser = trainData['user'].values
+        self.trainItem = trainData['item'].values
+        self.trainUniqueUsers = np.unique(self.trainUser)
+        self.traindataSize = len(self.trainUser)
+        self.valUser = val['user'].values
+        self.valItem = val['item'].values
 
         with open(test_file) as f:
             for l in f.readlines():
@@ -275,12 +289,15 @@ class Loader(BasicDataset):
         
         self.Graph = None
         print(f"{self.trainDataSize} interactions for training")
+        print(f"{len(self.valUser)} interactions for validation")
         print(f"{self.testDataSize} interactions for testing")
         print(f"{world.dataset} Sparsity : {(self.trainDataSize + self.testDataSize) / self.n_users / self.m_items}")
 
         # (users,items), bipartite graph
         self.UserItemNet = csr_matrix((np.ones(len(self.trainUser)), (self.trainUser, self.trainItem)),
                                       shape=(self.n_user, self.m_item))     # 稀疏矩阵（值，坐标，矩阵大小）
+        self.UserItemNet_all = csr_matrix((np.ones(len(self.trainUser_all)), (self.trainUser_all, self.trainItem_all)),
+                                      shape=(self.n_user, self.m_item)) 
         self.users_D = np.array(self.UserItemNet.sum(axis=1)).squeeze()     # (n_user, 1) squeeze-> (n_user,) 用户交互物品数量
         self.users_D[self.users_D == 0.] = 1
         self.items_D = np.array(self.UserItemNet.sum(axis=0)).squeeze()
@@ -288,6 +305,7 @@ class Loader(BasicDataset):
         # pre-calculate
         self._allPos = self.getUserPosItems(list(range(self.n_user)))
         self.__testDict = self.__build_test()
+        self.__valDict = self.__build_val()
         print(f"{world.dataset} is ready to go")
 
     @property
@@ -306,6 +324,10 @@ class Loader(BasicDataset):
     def testDict(self):
         return self.__testDict
 
+    @property
+    def valDict(self):
+        return self.__valDict
+    
     @property
     def allPos(self):
         return self._allPos
@@ -385,6 +407,21 @@ class Loader(BasicDataset):
                 test_data[user] = [item]
         return test_data
 
+    def __build_val(self):
+        """
+        return:
+            dict: {user: [items]}
+        """
+        # print("!!!!!!!! building val data !!!!!!!!")
+        val_data = {}
+        for i, item in enumerate(self.valItem):
+            user = self.valUser[i]
+            if val_data.get(user):
+                val_data[user].append(item)
+            else:
+                val_data[user] = [item]
+        return val_data
+
     def getUserItemFeedback(self, users, items):
         """
         users:
@@ -401,6 +438,12 @@ class Loader(BasicDataset):
         posItems = []
         for user in users:
             posItems.append(self.UserItemNet[user].nonzero()[1])
+        return posItems
+
+    def getUserPosItems_Test(self, users):
+        posItems = []
+        for user in users:
+            posItems.append(self.UserItemNet_all[user].nonzero()[1])
         return posItems
 
     # def getUserNegItems(self, users):

@@ -72,10 +72,13 @@ def test_one_batch(X):
             'ndcg':np.array(ndcg)}
         
             
-def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False):
+def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False, test=1):
     u_batch_size = world.config['test_u_batch_size']
     dataset: utils.BasicDataset
-    testDict: dict = dataset.testDict
+    if test==1:
+        testDict: dict = dataset.testDict
+    else:
+        testDict: dict = dataset.valDict
     Recmodel: model.LightGCN
     # eval mode with no dropout
     Recmodel = Recmodel.eval()
@@ -98,7 +101,11 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False):
         # ratings = []
         total_batch = len(users) // u_batch_size + 1
         for batch_users in utils.minibatch(users, batch_size=u_batch_size):
-            allPos = dataset.getUserPosItems(batch_users)
+            if test==1:
+                allPos = dataset.getUserPosItems_Test(batch_users)
+            else:
+                allPos = dataset.getUserPosItems(batch_users)
+            # allPos = dataset.getUserPosItems(batch_users)
             groundTrue = [testDict[u] for u in batch_users]
             batch_users_gpu = torch.Tensor(batch_users).long()      # 将用户ID移到GPU
             batch_users_gpu = batch_users_gpu.to(world.device)
@@ -125,6 +132,12 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False):
             users_list.append(batch_users)
             rating_list.append(rating_K.cpu())
             groundTrue_list.append(groundTrue)
+        print(f"Debug info:")
+        print(f"  len(users) = {len(users)}")
+        print(f"  u_batch_size = {u_batch_size}")
+        print(f"  total_batch (calculated) = {total_batch}")
+        print(f"  len(users_list) (actual) = {len(users_list)}")
+        print(f"  len(users) % u_batch_size = {len(users) % u_batch_size}")
         assert total_batch == len(users_list)           # 这代码不就纯纯有毛病么，必须得有余数才行
         X = zip(rating_list, groundTrue_list)
         if multicore == 1:
@@ -152,4 +165,9 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False):
         if multicore == 1:
             pool.close()
         print(results)
-        return results
+        # return results
+        
+        if test==0:
+            return results['recall'][0]
+        else:
+            return results

@@ -39,6 +39,13 @@ else:
     world.cprint("not enable tensorflowboard")
 
 Neg_k = 1
+# >>>>>>>>> 【新增】validation & early stop 配置 <<<<<<<<<
+early_stop = world.config.get("early_stop", 50)
+val_step = world.config.get("val_step", 5)
+
+group_best_recall = {}
+group_best_epoch = {}
+group_early_stop_cur = {}
 
 # ======================================================
 # ===== Stage 0: 初始化每个 group 的模型（只做一次）=====
@@ -53,6 +60,11 @@ group_datasets = {}        # >>> NEW
 for dataset in sub_datasets:
     gid = dataset.group_id
     print(f"[INIT] Group {gid}")
+
+    # >>>>>>>>> 【新增】每个 group 的 validation 状态 <<<<<<<<<
+    group_best_recall[gid] = -np.inf
+    group_best_epoch[gid] = 0
+    group_early_stop_cur[gid] = early_stop
 
     Recmodel = register.MODELS[world.model_name](world.config, dataset)     # 模型简称映射到模型名
     Recmodel = Recmodel.to(world.device)
@@ -76,20 +88,67 @@ for dataset in sub_datasets:
             except FileNotFoundError:
                 print(f"{weight_file} not exists, start from beginning")
         try:
-            for epoch in range(world.TRAIN_epochs):
-                start = time.time()
-                if epoch %10 == 0:
-                    cprint("[TEST]")
-                    Procedure.Test(dataset, Recmodel, epoch, w, world.config['multicore'])
-                output_information = Procedure.BPR_train_original(dataset, Recmodel, bpr, epoch, neg_k=Neg_k,w=w)
-                print(f'EPOCH[{epoch+1}/{world.TRAIN_epochs}] {output_information}')
+            # >>>>>>>>> 【修改】加入 validation + early stopping <<<<<<<<<
+            for epoch in range(1, world.TRAIN_epochs + 1):
+                output_information = Procedure.BPR_train_original(
+                    dataset,
+                    Recmodel,
+                    bpr,
+                    epoch,
+                    neg_k=Neg_k,
+                    w=w
+                )
+                print(f"[Group {gid}] EPOCH[{epoch}/{world.TRAIN_epochs}] {output_information}")
+
+                # ===== Validation =====
+                if epoch % val_step == 0:
+                    cprint(f"[Group {gid}] [VALIDATION]")
+                    recall = Procedure.Test(
+                        dataset,
+                        Recmodel,
+                        epoch,
+                        w,
+                        world.config['multicore'],
+                        False,
+                        test=0        # <<< 用 valDict
+                    )
+
+                    if recall > group_best_recall[gid]:
+                        group_best_recall[gid] = recall
+                        group_best_epoch[gid] = epoch
+                        group_early_stop_cur[gid] = early_stop
+
+                        torch.save(Recmodel.state_dict(), weight_file)
+                        print(f"[Group {gid}] New best val recall = {recall:.6f}, model saved")
+                    else:
+                        group_early_stop_cur[gid] -= val_step
+                        if group_early_stop_cur[gid] <= 0:
+                            print(f"[Group {gid}] Early stopping at epoch {epoch}")
+                            break
+
         finally:
             print(f"!!! end the training of group {dataset.group_id} !!!")
             if world.tensorboard:
                 w.close()
-        # 保存训练结果
-        torch.save(Recmodel.state_dict(), weight_file)
-        print(f"!!! the training result of group {dataset.group_id} saved !!!")
+        # # 保存训练结果
+        # torch.save(Recmodel.state_dict(), weight_file)
+        # print(f"!!! the training result of group {dataset.group_id} saved !!!")
+
+        # >>>>>>>>> 【修改】加载 validation 最优模型 <<<<<<<<<
+        print(f"[Group {gid}] Load best model from epoch {group_best_epoch[gid]}")
+        Recmodel.load_state_dict(torch.load(weight_file, map_location=world.device))
+
+        print(f"[Group {gid}] [FINAL TEST]")
+        Procedure.Test(
+            dataset,
+            Recmodel,
+            group_best_epoch[gid],
+            w,
+            world.config['multicore'],
+            False,
+            test=1        # <<< 用 testDict
+        )
+
     
     # 缓存模型
     group_models[gid] = Recmodel
@@ -171,7 +230,8 @@ for r in range(global_rounds):
             0,
             w,
             world.config['multicore'],
-            False
+            False,
+            test=1
         )
 print("\n================ All Global Rounds Finished ================")
 

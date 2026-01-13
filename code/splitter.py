@@ -82,7 +82,6 @@ class SubgraphSplitter:
     def _build_one_subloader(self, full_loader, gid, users):
         """
         为单独一组用户构造一个 Loader 子图对象
-        返回的 loader 只包含：
             1. 组内训练交互
             2. 组内测试交互
             3. 对应的 UserItemNet 稀疏矩阵
@@ -99,6 +98,14 @@ class SubgraphSplitter:
         tr_mask = np.isin(full_loader.trainUser, users)
         g_tr_user = np.array([uid_map[g_uid] for g_uid in full_loader.trainUser[tr_mask]])
         g_tr_item = full_loader.trainItem[tr_mask]
+        # ====== 【新增】train_all ======
+        tr_all_mask = np.isin(full_loader.trainUser_all, users)
+        g_tr_user_all = np.array([uid_map[g_uid] for g_uid in full_loader.trainUser_all[tr_all_mask]])
+        g_tr_item_all = full_loader.trainItem_all[tr_all_mask]
+        # 验证集
+        va_mask = np.isin(full_loader.valUser, users)
+        g_va_user = np.array([uid_map[g_uid] for g_uid in full_loader.valUser[va_mask]])
+        g_va_item = full_loader.valItem[va_mask]
         # 测试集
         te_mask = np.isin(full_loader.testUser, users)
         g_te_user = np.array([uid_map[g_uid] for g_uid in full_loader.testUser[te_mask]])
@@ -123,6 +130,8 @@ class SubgraphSplitter:
         # 训练数据 
         sub.trainUser        = g_tr_user
         sub.trainItem        = g_tr_item
+        sub.trainUser_all = g_tr_user_all          # 【新增】
+        sub.trainItem_all = g_tr_item_all          # 【新增】
         sub.trainUniqueUsers = np.arange(sub.n_user)   # 局部 0..n-1
         sub.traindataSize    = len(g_tr_user)
         # 测试数据 
@@ -130,26 +139,50 @@ class SubgraphSplitter:
         sub.testItem        = g_te_item
         sub.testUniqueUsers = np.unique(g_te_user)
         sub.testDataSize    = len(g_te_user)
+        # ====== 【新增】验证数据 ======
+        sub.valUser        = g_va_user
+        sub.valItem        = g_va_item
+        sub.valUniqueUsers = np.unique(g_va_user)
+        sub.valDataSize    = len(g_va_user)
 
         # UserItemNet 子图稀疏矩阵 
         sub.UserItemNet = csr_matrix(
             (np.ones(len(sub.trainUser)), (sub.trainUser, sub.trainItem)),
+            shape=(sub.n_user, sub.m_item))
+        sub.UserItemNet_all = csr_matrix(
+            (np.ones(len(sub.trainUser_all)), (sub.trainUser_all, sub.trainItem_all)),
             shape=(sub.n_user, sub.m_item))
 
         sub.users_D = np.array(sub.UserItemNet.sum(axis=1)).squeeze()     # (n_user, 1) squeeze-> (n_user,) 用户交互物品数量
         sub.users_D[sub.users_D == 0.] = 1
         sub.items_D = np.array(sub.UserItemNet.sum(axis=0)).squeeze()
         sub.items_D[sub.items_D == 0.] = 1.
-
-        # 用户正样本列表
-        sub._allPos = [[] for _ in range(sub.n_user)]
-        for u in sub.trainUniqueUsers:
-            sub._allPos[u] = sub.UserItemNet[u].nonzero()[1]
         
-        # testDict 
-        sub._Loader__testDict = {}
-        for u, i in zip(g_te_user, g_te_item):
-            sub._Loader__testDict.setdefault(u, []).append(i)
+        # pre-calculate
+        # print(f"@@@@@@@@@@@@@@@@@@@@@@@ [SubgraphSplitter] Pre-calculate subloader for group {gid} @@@@@@@@@@@@@@@@@@@@@@@")
+        sub._allPos = sub.getUserPosItems(list(range(sub.n_user)))
+        sub._Loader__testDict = sub._Loader__build_test()
+        # print("----- subsubsubsubsubsubsubsubsubsubsubsub ----")
+        sub._Loader__valDict = sub._Loader__build_val()
+
+        # # 用户正样本列表
+        # sub._allPos = [[] for _ in range(sub.n_user)]
+        # for u in sub.trainUniqueUsers:
+        #     sub._allPos[u] = sub.UserItemNet[u].nonzero()[1].astype(np.int64)
+        
+        # # testDict 
+        # sub._Loader__testDict = {}
+        # for u, i in zip(g_te_user, g_te_item):
+        #     sub._Loader__testDict.setdefault(u, []).append(i)
+        # # ====== 【新增】valDict ======
+        # sub._Loader__valDict = {}
+        # for u, i in zip(g_va_user, g_va_item):
+        #     sub._Loader__valDict.setdefault(u, []).append(i)
+        
+        print(f"[Group {gid}] "
+              f"train={sub.traindataSize}, "
+              f"val={sub.valDataSize}, "
+              f"test={sub.testDataSize}")
 
         return sub
 
