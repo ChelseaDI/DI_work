@@ -26,9 +26,9 @@ clustering = UserClustering(
 
 from server import ServerGraph
 server_graph = ServerGraph (
-    n_item = m_item,   # 全局 item 数
-    topk = world.config['server_topk'],
-    device=world.device
+    config=world.config,
+    n_items = m_item,   # 全局 item 数
+    device=world.device,
 )
 
 # init tensorboard
@@ -109,7 +109,6 @@ for dataset in sub_datasets:
                         epoch,
                         w,
                         world.config['multicore'],
-                        False,
                         test=0        # <<< 用 valDict
                     )
 
@@ -130,9 +129,6 @@ for dataset in sub_datasets:
             print(f"!!! end the training of group {dataset.group_id} !!!")
             if world.tensorboard:
                 w.close()
-        # # 保存训练结果
-        # torch.save(Recmodel.state_dict(), weight_file)
-        # print(f"!!! the training result of group {dataset.group_id} saved !!!")
 
         # >>>>>>>>> 【修改】加载 validation 最优模型 <<<<<<<<<
         print(f"[Group {gid}] Load best model from epoch {group_best_epoch[gid]}")
@@ -145,10 +141,8 @@ for dataset in sub_datasets:
             group_best_epoch[gid],
             w,
             world.config['multicore'],
-            False,
             test=1        # <<< 用 testDict
         )
-
     
     # 缓存模型
     group_models[gid] = Recmodel
@@ -180,8 +174,7 @@ for r in range(global_rounds):
     print("===== clustering and server collecting Finished =====")
 
     # Server-level graph convolution
-    updated_cluster_emb = server_graph.run(cluster_data_list)
-    global_item_emb = server_graph.get_global_item_embedding()
+    updated_cluster_emb, global_item_emb = server_graph.run(cluster_data_list)
     print("===== Server Graph Convolution Finished =====")
     print(f"Total clusters updated: {len(updated_cluster_emb)}")
                                                         # updated_cluster_emb:
@@ -204,8 +197,9 @@ for r in range(global_rounds):
                 continue
             for u in users:
                 user_emb[u] = user_emb[u] + alpha * cluster_updated_embs[cid]
+                # user_emb[u] = cluster_updated_embs[cid]
         Recmodel.embedding_user.weight.data.copy_(user_emb)     # 把更新后的 user embedding 写回模型
-        Recmodel.global_item_emb = global_item_emb
+        # Recmodel.embedding_item.weight.data.copy_(global_item_emb)    # 用 server 端训练后的 item embedding 更新本地模型
     # group-level local training
     for gid, Recmodel in group_models.items():
         dataset = group_datasets[gid]
@@ -230,7 +224,6 @@ for r in range(global_rounds):
             0,
             w,
             world.config['multicore'],
-            False,
             test=1
         )
 print("\n================ All Global Rounds Finished ================")
@@ -245,5 +238,5 @@ for gid, Recmodel in group_models.items():
         0,
         w,
         world.config['multicore'],
-        False
+        test=1
     )

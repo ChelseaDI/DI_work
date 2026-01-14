@@ -88,7 +88,6 @@ class LightGCN(BasicModel):
         self.config = config
         self.dataset : BasicDataset = dataset
         self.group_id = getattr(dataset, "group_id", None)
-        self.global_item_emb = None
         self.__init_weight()
 
     def __init_weight(self):
@@ -173,21 +172,21 @@ class LightGCN(BasicModel):
         users, items = torch.split(light_out, [self.num_users, self.num_items])
         return users, items
     
-    # def getUsersRating(self, users):
-    #     all_users, all_items = self.computer()
-    #     users_emb = all_users[users.long()]
-    #     items_emb = all_items
-    #     rating = self.f(torch.matmul(users_emb, items_emb.t()))
-    #     return rating
-    def getUsersRating(self, users, use_global_item=False):
+    def getUsersRating(self, users):
         all_users, all_items = self.computer()
         users_emb = all_users[users.long()]
-        if use_global_item and self.global_item_emb is not None:
-            items_emb = self.global_item_emb.to(users_emb.device)
-        else:
-            items_emb = all_items
+        items_emb = all_items
         rating = self.f(torch.matmul(users_emb, items_emb.t()))
         return rating
+    # def getUsersRating(self, users, use_global_item=False):
+    #     all_users, all_items = self.computer()
+    #     users_emb = all_users[users.long()]
+    #     if use_global_item and self.global_item_emb is not None:
+    #         items_emb = self.global_item_emb.to(users_emb.device)
+    #     else:
+    #         items_emb = all_items
+    #     rating = self.f(torch.matmul(users_emb, items_emb.t()))
+    #     return rating
 
     
     def getEmbedding(self, users, pos_items, neg_items):

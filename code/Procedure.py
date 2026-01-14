@@ -72,7 +72,7 @@ def test_one_batch(X):
             'ndcg':np.array(ndcg)}
         
             
-def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False, test=1):
+def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1):
     u_batch_size = world.config['test_u_batch_size']
     dataset: utils.BasicDataset
     if test==1:
@@ -110,7 +110,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, use_global_item=False, t
             batch_users_gpu = torch.Tensor(batch_users).long()      # 将用户ID移到GPU
             batch_users_gpu = batch_users_gpu.to(world.device)
 
-            rating = Recmodel.getUsersRating(batch_users_gpu, use_global_item)       # 获取用户评分预测
+            rating = Recmodel.getUsersRating(batch_users_gpu)       # 获取用户评分预测
             #rating = rating.cpu()
             # 排除已交互物品
             exclude_index = []
