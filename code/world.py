@@ -49,14 +49,23 @@ config['bigdata'] = False
 config['group_size'] = 3000
 config['n_clusters'] = 1000
 config['server_topk'] = 5
-config['cluster_alpha'] = 0.1
+config['cluster_alpha'] = 0.5
 
 config['global_rounds'] = 20
 config['local_epochs'] = 10
 config['load_pretrain'] = True
-config['server_warm_start'] = False
+config['server_warm_start'] = False 
 config['server_graph_enhance'] = False
 config['n_clusters_all'] = 10000
+config['server_epochs'] = 1000
+config['server_val_step'] = 5
+config['server_n_layers'] = 3
+config['server_early_stop'] = 50
+config['server_bpr_batch_size'] = 4096
+config['server_test_u_batch_size'] = 111
+
+config['early_stop'] = 50
+config['val_step'] = 5
 
 GPU = torch.cuda.is_available()
 device = torch.device('cuda' if GPU else "cpu")

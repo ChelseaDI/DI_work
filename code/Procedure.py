@@ -23,7 +23,7 @@ from sklearn.metrics import roc_auc_score
 CORES = multiprocessing.cpu_count() // 2
 
 
-def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None):
+def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None, isServer=False):
     Recmodel = recommend_model
     Recmodel.train()        # 把模型切换成训练模式
     bpr: utils.BPRLoss = loss_class
@@ -38,7 +38,13 @@ def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=N
     posItems = posItems.to(world.device)
     negItems = negItems.to(world.device)
     users, posItems, negItems = utils.shuffle(users, posItems, negItems)
-    total_batch = len(users) // world.config['bpr_batch_size'] + 1
+    if isServer:
+        total_batch = len(users) // world.config['server_bpr_batch_size'] + 1
+        print(f"Server BPR Training: total_batch = {total_batch}, bpr_batch_size = {world.config['server_bpr_batch_size']}")
+    else:
+        total_batch = len(users) // world.config['bpr_batch_size'] + 1
+        print(f"Client BPR Training: total_batch = {total_batch}, bpr_batch_size = {world.config['bpr_batch_size']}")
+    # total_batch = len(users) // world.config['bpr_batch_size'] + 1
     aver_loss = 0.
     for (batch_i,
          (batch_users,
@@ -72,8 +78,14 @@ def test_one_batch(X):
             'ndcg':np.array(ndcg)}
         
             
-def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1):
-    u_batch_size = world.config['test_u_batch_size']
+def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False):
+    if isServer:
+        u_batch_size = world.config['server_test_u_batch_size']
+        print(f"Server Test: u_batch_size = {u_batch_size}")
+    else:
+        u_batch_size = world.config['test_u_batch_size']
+        print(f"Client Test: u_batch_size = {u_batch_size}")
+    # u_batch_size = world.config['test_u_batch_size']
     dataset: utils.BasicDataset
     if test==1:
         testDict: dict = dataset.testDict
@@ -99,7 +111,10 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1):
         groundTrue_list = []
         # auc_record = []
         # ratings = []
-        total_batch = len(users) // u_batch_size + 1
+        # total_batch = len(users) // u_batch_size + 1
+        total_batch = (len(users) // u_batch_size
+               if len(users) % u_batch_size == 0
+               else len(users) // u_batch_size + 1)
         for batch_users in utils.minibatch(users, batch_size=u_batch_size):
             if test==1:
                 allPos = dataset.getUserPosItems_Test(batch_users)

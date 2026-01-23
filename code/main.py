@@ -40,8 +40,8 @@ else:
 
 Neg_k = 1
 # >>>>>>>>> 【新增】validation & early stop 配置 <<<<<<<<<
-early_stop = world.config.get("early_stop", 50)
-val_step = world.config.get("val_step", 5)
+early_stop = world.config['early_stop']
+val_step = world.config['val_step']
 
 group_best_recall = {}
 group_best_epoch = {}
@@ -50,18 +50,19 @@ group_early_stop_cur = {}
 # ======================================================
 # ===== Stage 0: 初始化每个 group 的模型（只做一次）=====
 # ======================================================
-group_models = {}          # >>> NEW
-group_bpr = {}             # >>> NEW
-group_datasets = {}        # >>> NEW
+group_models = {}          
+group_bpr = {}             
+group_datasets = {}        
 
 # ======================================================
 # group-level training and testing，然后 clustering （基于 k-means）
 # ======================================================
 for dataset in sub_datasets:
     gid = dataset.group_id
-    print(f"[INIT] Group {gid}")
+    print("\n")
+    cprint(f"=============== [INIT] Group {gid} =============== ")
 
-    # >>>>>>>>> 【新增】每个 group 的 validation 状态 <<<<<<<<<
+    # >>>>>>>>> 初始化各 group 的 validation 状态 <<<<<<<<<
     group_best_recall[gid] = -np.inf
     group_best_epoch[gid] = 0
     group_early_stop_cur[gid] = early_stop
@@ -79,7 +80,7 @@ for dataset in sub_datasets:
         Recmodel.load_state_dict(torch.load(weight_file, map_location=world.device))
         world.cprint(f"loaded model weights from {weight_file}")
     else:
-        print(f"[Group {dataset.group_id}] : Training LightGCN from scratch")
+        print(f"[Group {dataset.group_id}] : Training LightGCN from scratch\n")
         if world.LOAD:
             print(f"!!!!!! try to carry on training from {weight_file} !!!!!!")
             try:
@@ -102,7 +103,7 @@ for dataset in sub_datasets:
 
                 # ===== Validation =====
                 if epoch % val_step == 0:
-                    cprint(f"[Group {gid}] [VALIDATION]")
+                    print(f"\n----------- [Group {gid}] [VALIDATION] -----------")
                     recall = Procedure.Test(
                         dataset,
                         Recmodel,
@@ -118,23 +119,24 @@ for dataset in sub_datasets:
                         group_early_stop_cur[gid] = early_stop
 
                         torch.save(Recmodel.state_dict(), weight_file)
-                        print(f"[Group {gid}] New best val recall = {recall:.6f}, model saved")
+                        print(f"[Group {gid}] New best val recall = {recall:.6f}, model saved\n\n")
                     else:
                         group_early_stop_cur[gid] -= val_step
+                        print("\n\n")
                         if group_early_stop_cur[gid] <= 0:
-                            print(f"[Group {gid}] Early stopping at epoch {epoch}")
+                            print(f"[Group {gid}] Early stopping at epoch {epoch}\n\n")
                             break
 
         finally:
-            print(f"!!! end the training of group {dataset.group_id} !!!")
+            cprint(f"!!! end the training of group {dataset.group_id} !!!\n")
             if world.tensorboard:
                 w.close()
 
         # >>>>>>>>> 【修改】加载 validation 最优模型 <<<<<<<<<
-        print(f"[Group {gid}] Load best model from epoch {group_best_epoch[gid]}")
+        print(f"\n[Group {gid}] Load best model from epoch {group_best_epoch[gid]}")
         Recmodel.load_state_dict(torch.load(weight_file, map_location=world.device))
 
-        print(f"[Group {gid}] [FINAL TEST]")
+        cprint(f"[Group {gid}] [FINAL TEST]")
         Procedure.Test(
             dataset,
             Recmodel,
@@ -148,15 +150,16 @@ for dataset in sub_datasets:
     group_models[gid] = Recmodel
     group_bpr[gid] = bpr
     group_datasets[gid] = dataset
-print("================ Initialization Finished ================")
+cprint("================ Initialization Finished ================")
 
 # global-local 多轮迭代 初始化
-global_rounds = world.config.get("global_rounds", 3)          # 总轮次
-local_epochs = world.config.get("local_epochs", 5)            # user emb 更新后，group-level training 轮次
-alpha = world.config.get("cluster_alpha", 0.1)                # user emb 学习率
+global_rounds = world.config["global_rounds"]          # 总轮次
+local_epochs = world.config["local_epochs"]            # user emb 更新后，group-level training 轮次
+alpha = world.config["cluster_alpha"]                # user emb 学习率
 
 for r in range(global_rounds):
-    print(f"\n================ Global Round {r} ================")
+    print("\n")
+    cprint(f"================ Global Round {r} ================")
     cluster_data_list = []   # 收集该轮次所有 group 的 cluster 信息
     server_graph.reset()
     for gid, Recmodel in group_models.items():
@@ -171,11 +174,11 @@ for r in range(global_rounds):
             f"[Group {cluster_data['group_id']}] "
             f"#clusters = {cluster_data['n_clusters']}"
     )
-    print("===== clustering and server collecting Finished =====")
+    cprint("===== clustering and server collecting Finished =====")
 
     # Server-level graph convolution
     updated_cluster_emb, global_item_emb = server_graph.run(cluster_data_list)
-    print("===== Server Graph Convolution Finished =====")
+    cprint("===== Server Graph Convolution Finished =====")
     print(f"Total clusters updated: {len(updated_cluster_emb)}")
                                                         # updated_cluster_emb:
                                                             # key   = (group_id, cluster_id)
@@ -196,15 +199,15 @@ for r in range(global_rounds):
             if cid not in cluster_updated_embs:
                 continue
             for u in users:
-                user_emb[u] = user_emb[u] + alpha * cluster_updated_embs[cid]
+                user_emb[u] = 0.5*user_emb[u] + alpha * cluster_updated_embs[cid]
                 # user_emb[u] = cluster_updated_embs[cid]
         Recmodel.embedding_user.weight.data.copy_(user_emb)     # 把更新后的 user embedding 写回模型
-        # Recmodel.embedding_item.weight.data.copy_(global_item_emb)    # 用 server 端训练后的 item embedding 更新本地模型
+        Recmodel.embedding_item.weight.data.copy_(global_item_emb)    # 用 server 端训练后的 item embedding 更新本地模型
     # group-level local training
     for gid, Recmodel in group_models.items():
         dataset = group_datasets[gid]
         bpr = group_bpr[gid]
-        print(f"[Round {r}] Group {gid} local training")
+        print(f"\n----------- [Round {r}] Group {gid} local training -----------")
         for epoch in range(local_epochs):
             Procedure.BPR_train_original(
                 dataset,
@@ -214,7 +217,7 @@ for r in range(global_rounds):
                 neg_k=Neg_k,
                 w=w
             )
-    print(f"----------- [ROUND {r} TEST] ----------")
+    print(f"------------- [ROUND {r} TEST] ------------")
     for gid, Recmodel in group_models.items():
         dataset = group_datasets[gid]
         print(f"[ROUND {r} TEST] : Group {gid}")
@@ -226,7 +229,7 @@ for r in range(global_rounds):
             world.config['multicore'],
             test=1
         )
-print("\n================ All Global Rounds Finished ================")
+cprint("\n================ All Global Rounds Finished ================")
 
 print("\n================ FINAL TEST ================")
 for gid, Recmodel in group_models.items():

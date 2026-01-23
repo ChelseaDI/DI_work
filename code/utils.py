@@ -123,6 +123,13 @@ def getFileName(model=None):
         return os.path.join(world.FILE_PATH, "group" + str(model.group_id), file)
     return os.path.join(world.FILE_PATH, file)
 
+def getServerWeightFileName():
+    file = f"{world.dataset}-{world.config['server_n_layers']}-{world.config['latent_dim_rec']}.pth.tar"
+    weight_dir = os.path.join(world.FILE_PATH, "server")
+    os.makedirs(weight_dir, exist_ok=True)
+    weight_path = os.path.join(weight_dir, file)
+    return weight_path
+
 
 def minibatch(*tensors, **kwargs):
 

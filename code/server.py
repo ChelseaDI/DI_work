@@ -2,6 +2,13 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from scipy.sparse import csr_matrix
+import os
+
+import dataloader
+import model
+import utils
+import Procedure
+from world import cprint
 
 class ServerGraph:
     """
@@ -15,21 +22,11 @@ class ServerGraph:
     5. 输出更新后的 cluster embedding
     """
 
-    def __init__(self, config:dict, n_items, device="cpu"):
-        """
-            n_items : int
-                总 item 数
-            n_clusters_all : int
-                全局 cluster 总数
-            item_emb_buffer : list
-                用于缓存各子图上传的 item embeddings
-            topk : int
-                每个 cluster 连接的最相似 cluster 数
-            device : torch.device
-        """
+    def __init__(self, config: dict, n_items, device="cpu"):
         self.device = device
         self.n_items = n_items
         self.config = config
+
         self.n_clusters_all = self.config['n_clusters_all']
         self.latent_dim = self.config['latent_dim_rec']
         self.topk = self.config['server_topk']
@@ -37,21 +34,16 @@ class ServerGraph:
         self.server_graph_enhance = self.config['server_graph_enhance']
 
         self.item_emb_buffer = []
-        self.__init_weight__()
-        
-    def __init_weight__(self):
-        self.server_item_emb = torch.nn.Embedding(
-            num_embeddings=self.n_items, embedding_dim=self.latent_dim)
-        self.embedding_cluster = torch.nn.Embedding(
-            num_embeddings=self.n_clusters_all, embedding_dim=self.latent_dim) 
-    
+
     def reset(self):
         """
         清空上一轮 server 聚合过程中缓存的状态
         """
         self.item_emb_buffer = []
-        self.__init_weight__()
-    
+
+    # =========================================================
+    # [MODIFIED] 解析 cluster 数据（torch-safe，不再 numpy stack）
+    # =========================================================
     def _parse_clusters(self, cluster_data_list):
         # 用于将各 group 的 clusters data 平铺
         # [ [group1_cluster1], [group1_cluster2], [group2_cluster1], ... ]
@@ -63,17 +55,17 @@ class ServerGraph:
             gid = data["group_id"]
             for cid, emb in data["cluster_embeddings"].items():
                 cluster_keys.append((gid, cid))
-                cluster_embs.append(emb)
+                cluster_embs.append(emb)                          # emb 已是 torch.Tensor
                 cluster_items.append(set(data["cluster_items"][cid]))
 
-        # (n_cluster, dim)
-        cluster_embs = torch.tensor(
-            np.stack(cluster_embs),
-            dtype=torch.float32,
-            device=self.device
-        )
+        # [MODIFIED] torch.cat + stack（避免 numpy → torch 往返）
+        cluster_embs = torch.stack(cluster_embs, dim=0).to(self.device)     # (n_clusters_all, dim)
+
         return cluster_embs, cluster_items, cluster_keys
-    
+
+    # =========================================================
+    # 相似度计算
+    # =========================================================
     def _calc_cluster_sim(self, cluster_embs, cluster_items, mode="jaccard"):
         """
         mode:
@@ -85,7 +77,7 @@ class ServerGraph:
         if mode == "jaccard":
             return self._calc_cluster_sim_by_jaccard(cluster_items)
         raise ValueError(f"Unknown sim mode: {mode}")
-    
+
     def _calc_cluster_sim_by_cosine(self, cluster_embs):
         """
         cluster_embs: Tensor, (n_cluster, dim)
@@ -96,16 +88,21 @@ class ServerGraph:
         sim_matrix.fill_diagonal_(-1e9)                        # 自己对自己 -- 负无穷
 
         return sim_matrix
-    
+
     def _calc_cluster_sim_by_jaccard(self, cluster_items):
         """
         cluster_items: List[Set[item_id]]
         """
-        sim_matrix = torch.zeros((self.n_clusters_all, self.n_clusters_all), device=self.device)
-
-        for i in range(self.n_clusters_all):
+        n_clusters_all = len(cluster_items)                             # [MODIFIED]
+        try:
+            assert n_clusters_all == self.n_clusters_all 
+        except AssertionError:
+            print(f"!!!!! n_clusters_all: {n_clusters_all}, self.n_clusters_all: {self.n_clusters_all}")
+        
+        sim_matrix = torch.zeros((n_clusters_all, n_clusters_all), device=self.device)
+        for i in range(n_clusters_all):
             items_i = cluster_items[i]
-            for j in range(i + 1, self.n_clusters_all):
+            for j in range(i + 1, n_clusters_all):
                 items_j = cluster_items[j]
                 inter = len(items_i & items_j)
                 if inter == 0:
@@ -114,11 +111,12 @@ class ServerGraph:
                 sim = inter / union
                 sim_matrix[i, j] = sim
                 sim_matrix[j, i] = sim
-
         sim_matrix.fill_diagonal_(-1e9)
         return sim_matrix
-    
+
+    # =========================================================
     # 子图上传 item embedding
+    # =========================================================
     def collect_item_embeddings(self, item_emb):
         """
         item_emb : Tensor, shape = (n_item, dim)
@@ -136,7 +134,10 @@ class ServerGraph:
         stacked = torch.stack(self.item_emb_buffer, dim=0)      # (n_group, n_item, dim)
         server_item_emb = stacked.mean(dim=0)                   # (n_item, dim)
         return server_item_emb.to(self.device)
-    
+
+    # =========================================================
+    # Top-K 邻居选择
+    # =========================================================
     def _select_topk_neighbors(self, sim_matrix):
         """
         Select Top-K similar clusters for each cluster.
@@ -144,39 +145,55 @@ class ServerGraph:
         # 取 Top-K 相似 cluster，构建 server-level 的 User–Item 图
         _, topk_idx = torch.topk(sim_matrix, self.topk, dim=1)      # topk_idx: (n_cluster, topk)
         return topk_idx
-    
+
+    # =========================================================
+    # 构图逻辑（cluster → item）
+    # =========================================================
     def _build_server_graph(self, sim_matrix, cluster_items, mode="self"):
         if mode == "self":
-            return self._build_graph_self_items(cluster_items)
+            UserItemNet, train_user_all, train_item_all = self._build_graph_self_items(cluster_items)
+            return UserItemNet, train_user_all, train_item_all
         if mode == "topk":
-            return self._build_graph_topk_cluster_items(sim_matrix, cluster_items)
+            UserItemNet, train_user_all, train_item_all = self._build_graph_topk_cluster_items(sim_matrix, cluster_items)
+            return UserItemNet, train_user_all, train_item_all
         if mode == "self+topk":
-            return self._build_graph_self_and_topk_items(sim_matrix, cluster_items)
+            UserItemNet, train_user_all, train_item_all = self._build_graph_self_and_topk_items(sim_matrix, cluster_items)
+            return UserItemNet, train_user_all, train_item_all
         raise ValueError(f"Unknown graph mode: {mode}")
 
     def _build_graph_self_items(self, cluster_items):
-        edge_users, edge_items = [], []
-
-        for i in range(self.n_clusters_all):
+        n_clusters_all = len(cluster_items)
+        try:
+            assert n_clusters_all == self.n_clusters_all 
+        except AssertionError:
+            print(f"!!!!! n_clusters_all: {n_clusters_all}, self.n_clusters_all: {self.n_clusters_all}")
+        
+        edge_users, edge_items = [], [] 
+        for i in range(n_clusters_all):
             for it in cluster_items[i]:
                 edge_users.append(i)
                 edge_items.append(it)
 
         UserItemNet = csr_matrix(
             (np.ones(len(edge_users)), (edge_users, edge_items)),
-            shape=(self.n_clusters_all, self.n_items)
+            shape=(n_clusters_all, self.n_items)
         )
-        return UserItemNet
+        return UserItemNet, edge_users, edge_items
 
     def _build_graph_topk_cluster_items(self, sim_matrix, cluster_items):
         """
         cluster i connects to items covered by its Top-K similar clusters
         """
-        topk_idx = self._select_topk_neighbors(sim_matrix)
+        n_clusters_all = len(cluster_items)
+        try:
+            assert n_clusters_all == self.n_clusters_all 
+        except AssertionError:
+            print(f"!!!!! n_clusters_all: {n_clusters_all}, self.n_clusters_all: {self.n_clusters_all}")
         
+        topk_idx = self._select_topk_neighbors(sim_matrix)
         edge_users, edge_items = [], []
 
-        for i in range(self.n_clusters_all):
+        for i in range(n_clusters_all):
             neigh_items = set()
             for j in topk_idx[i]:
                 neigh_items |= cluster_items[j]
@@ -186,50 +203,36 @@ class ServerGraph:
 
         UserItemNet = csr_matrix(
             (np.ones(len(edge_users)), (edge_users, edge_items)),
-            shape=(self.n_clusters_all, self.n_items)
+            shape=(n_clusters_all, self.n_items)
         )
-        return UserItemNet
-    
+        return UserItemNet, edge_users, edge_items
+
     def _build_graph_self_and_topk_items(self, sim_matrix, cluster_items):
+        n_clusters_all = len(cluster_items)
+        try:
+            assert n_clusters_all == self.n_clusters_all 
+        except AssertionError:
+            print(f"!!!!! n_clusters_all: {n_clusters_all}, self.n_clusters_all: {self.n_clusters_all}")
+            
         topk_idx = self._select_topk_neighbors(sim_matrix)
-
         edge_users, edge_items = [], []
-
-        for i in range(self.n_clusters_all):
-            items = set(cluster_items[i])   # 自身
+        for i in range(n_clusters_all):
+            items = set(cluster_items[i])
             for j in topk_idx[i]:
-                items |= cluster_items[j]   # 邻居扩散
+                items |= cluster_items[j]
             for it in items:
                 edge_users.append(i)
                 edge_items.append(it)
 
         UserItemNet = csr_matrix(
             (np.ones(len(edge_users)), (edge_users, edge_items)),
-            shape=(self.n_clusters_all, self.n_items)
+            shape=(n_clusters_all, self.n_items)
         )
-        return UserItemNet
-
-    def _normalize_graph(self, UserItemNet):
-        # 计算度（LightGCN 归一化用）
-        user_deg = np.array(UserItemNet.sum(axis=1)).squeeze()
-        item_deg = np.array(UserItemNet.sum(axis=0)).squeeze()
-        user_deg[user_deg == 0] = 1
-        item_deg[item_deg == 0] = 1
-        # 构造对称归一化后的稀疏图（cluster + item）
-        rows, cols = UserItemNet.nonzero()
-        vals = 1.0 / np.sqrt(user_deg[rows] * item_deg[cols])
-        idx_ci = torch.tensor([rows, cols + self.n_clusters_all], dtype=torch.long)         # 右上角    cluster -> item
-        idx_ic = torch.tensor([cols + self.n_clusters_all, rows], dtype=torch.long)         # 左下角    item -> cluster
-        indices = torch.cat([idx_ci, idx_ic], dim=1)
-        values = torch.tensor(np.concatenate([vals, vals]), dtype=torch.float32)
-
-        return torch.sparse_coo_tensor(
-            indices=indices,
-            values=values,
-            size=(self.n_clusters_all + self.n_items, self.n_clusters_all + self.n_items),
-            device=self.device
-        )
-
+        return UserItemNet, edge_users, edge_items
+    
+    # =========================================================
+    # Server 主流程
+    # =========================================================
     def run(self, cluster_data_list):
         """
         cluster_data_list : List[dict]
@@ -240,34 +243,86 @@ class ServerGraph:
                 value : torch.Tensor (updated embedding)
         """
         cluster_embs, cluster_items, cluster_keys = self._parse_clusters(cluster_data_list)
-        n_cluster, dim = cluster_embs.shape
+        n_clusters_all, dim = cluster_embs.shape
+        try:
+            assert n_clusters_all == self.n_clusters_all 
+        except AssertionError:
+            print(f"!!!!! n_clusters_all: {n_clusters_all}, self.n_clusters_all: {self.n_clusters_all}")
 
-        # 构建 server-level User–Item 图
+        # 获取 server 端 train_user_all 和 train_item_all，用于构建 server 端 dataset，从而构建 server 端 model
         if self.server_graph_enhance:
             sim_matrix = self._calc_cluster_sim(cluster_embs, cluster_items, mode="cosine")
-            UserItemNet = self._build_server_graph(sim_matrix, cluster_items, mode="self+topk")
+            UserItemNet, train_user_all, train_item_all = self._build_server_graph(sim_matrix, cluster_items, mode="self+topk")
         else:
-            UserItemNet = self._build_server_graph(None, cluster_items, mode="self")    
-        # 图归一化
-        Graph = self._normalize_graph(UserItemNet)                                      
-
+            UserItemNet, train_user_all, train_item_all = self._build_server_graph(None, cluster_items, mode="self")    
+        # 构建 server 端 dataset
+        server_dataset = dataloader.Loader(
+            train_user_all=train_user_all,
+            train_item_all=train_item_all,
+            n_users=n_clusters_all,
+            m_items=self.n_items,
+            build_graph=True,
+            device=self.device
+        )
+        # 构建 server 端 model
+        server_recmodel = model.LightGCN(self.config, server_dataset)     # 模型简称映射到模型名
+        server_recmodel = server_recmodel.to(self.device)
+        bpr = utils.BPRLoss(server_recmodel, self.config)                                  
         if self.warm_start:
-            self.server_item_emb.weight.data.copy_(self.aggregate_item_embeddings())
-            self.embedding_cluster.weight.data.copy_(cluster_embs)
+            server_recmodel.embedding_item.weight.data.copy_(self.aggregate_item_embeddings())
+            server_recmodel.embedding_user.weight.data.copy_(cluster_embs)
 
-        # 实例化 server LightGCN
-        server_lgn = ServerLightGCN(
-            n_cluster=n_cluster,
-            n_item=self.n_items,
-            dim=dim,
-            n_layers=3,
-            Graph=Graph
-        ).to(self.device)
-        # 初始化 embedding
-        server_lgn.embedding_cluster.weight.data.copy_(self.embedding_cluster.weight.data)
-        server_lgn.embedding_item.weight.data.copy_(self.server_item_emb.weight.data)
+        # 训练 server 端模型
+        server_train_epochs = self.config['server_epochs']
+        server_val_step = self.config['server_val_step']
+        Neg_k = 1
+        best_recall = -np.inf
+        best_epoch = 0
+        early_stop = self.config['server_early_stop']
+        early_stop_cur = early_stop
+        step = 5
+        try:
+            print(f"==================== Starting server training ====================")
+            for epoch in range(1, server_train_epochs + 1):
+                output_information = Procedure.BPR_train_original(
+                    server_dataset,
+                    server_recmodel,
+                    bpr,
+                    epoch,
+                    neg_k=Neg_k,
+                    isServer=True
+                )
+                print(f"Server EPOCH[{epoch}/{server_train_epochs}] {output_information}")
+                # validation
+                if epoch % server_val_step == 0:
+                    cprint(f"[SERVER] [VALIDATION]")
+                    recall = Procedure.Test(
+                        server_dataset,
+                        server_recmodel,
+                        epoch,
+                        multicore=self.config['multicore'],
+                        test=0,        # 用 valDict
+                        isServer=True
+                    )
+                    if recall > best_recall:
+                        best_recall = recall
+                        best_epoch = epoch
+                        early_stop_cur = early_stop
+
+                        weight_path = utils.getServerWeightFileName()
+                        torch.save(server_recmodel.state_dict(), weight_path)
+                    else:
+                        early_stop_cur -= step
+                        if early_stop_cur == 0:
+                            break
+
+        finally:
+            print("===================== end the training of server ====================")
+        print(f"Load best server model from epoch {best_epoch}")
+        server_recmodel.load_state_dict(torch.load(weight_path, map_location=self.device))
+        
         # 前向传播，得到更新后的 cluster embedding
-        cluster_out, item_out = server_lgn.computer()
+        cluster_out, item_out = server_recmodel.computer()
 
         # 封装输出
         updated_cluster_emb = {
@@ -277,27 +332,3 @@ class ServerGraph:
         updated_item_emb = item_out.detach()
 
         return updated_cluster_emb, updated_item_emb
-
-# ======================================================
-# Server-side LightGCN 对象
-# ======================================================
-class ServerLightGCN(torch.nn.Module):
-    def __init__(self, n_cluster, n_item, dim, n_layers, Graph):
-        super().__init__()
-        self.n_cluster = n_cluster
-        self.n_item = n_item
-        self.n_layers = n_layers
-        self.embedding_cluster = torch.nn.Embedding(n_cluster, dim)
-        self.embedding_item = torch.nn.Embedding(n_item, dim)
-        self.Graph = Graph
-    def computer(self):
-        cluster_emb = self.embedding_cluster.weight
-        item_emb = self.embedding_item.weight
-        all_emb = torch.cat([cluster_emb, item_emb], dim=0)
-        embs = [all_emb]
-        for _ in range(self.n_layers):
-            all_emb = torch.sparse.mm(self.Graph, all_emb)
-            embs.append(all_emb)
-        embs = torch.stack(embs, dim=1)
-        out = torch.mean(embs, dim=1)
-        return torch.split(out, [self.n_cluster, self.n_item])
