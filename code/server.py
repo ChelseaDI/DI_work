@@ -241,6 +241,10 @@ class ServerGraph:
             updated_cluster_emb : dict
                 key   : global_cluster_id
                 value : torch.Tensor (updated embedding)
+            updated_item_emb : Tensor, shape = (n_item, dim)
+                server 端更新后的 item embedding
+            server_rating : Tensor, shape = (n_clusters_all, n_items)
+                server 端对所有 cluster 对所有 item 的评分矩阵
         """
         cluster_embs, cluster_items, cluster_keys = self._parse_clusters(cluster_data_list)
         n_clusters_all, dim = cluster_embs.shape
@@ -331,4 +335,11 @@ class ServerGraph:
         }
         updated_item_emb = item_out.detach()
 
-        return updated_cluster_emb, updated_item_emb
+        print("===================== server test: cal server rating ====================")
+        rating_out = Procedure.server_test(server_recmodel)
+        server_rating = {
+            key: rating
+            for key, rating in zip(cluster_keys, rating_out)
+        }
+
+        return updated_cluster_emb, updated_item_emb, server_rating

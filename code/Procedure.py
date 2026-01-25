@@ -78,7 +78,7 @@ def test_one_batch(X):
             'ndcg':np.array(ndcg)}
         
             
-def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False):
+def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, rating_initial=None):
     if isServer:
         u_batch_size = world.config['server_test_u_batch_size']
         print(f"Server Test: u_batch_size = {u_batch_size}")
@@ -126,6 +126,9 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False):
             batch_users_gpu = batch_users_gpu.to(world.device)
 
             rating = Recmodel.getUsersRating(batch_users_gpu)       # 获取用户评分预测
+            if rating_initial is not None and not isServer:
+                # print("\n--------- Using cluster initial rating -----------\n")
+                rating += rating_initial[batch_users_gpu]
             #rating = rating.cpu()
             # 排除已交互物品
             exclude_index = []
@@ -186,3 +189,16 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False):
             return results['recall'][0]
         else:
             return results
+
+    
+def server_test(server_recmodel):
+    """
+    返回：
+        server_rating_cluster : Tensor
+            shape = (n_clusters_all, n_items)
+    """
+    server_recmodel.eval()
+    with torch.no_grad():
+        users_emb, items_emb = server_recmodel.computer()
+        rating = server_recmodel.f(torch.matmul(users_emb, items_emb.t()))
+    return rating.detach()

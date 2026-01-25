@@ -177,7 +177,7 @@ for r in range(global_rounds):
     cprint("===== clustering and server collecting Finished =====")
 
     # Server-level graph convolution
-    updated_cluster_emb, global_item_emb = server_graph.run(cluster_data_list)
+    updated_cluster_emb, global_item_emb, server_rating = server_graph.run(cluster_data_list)
     cprint("===== Server Graph Convolution Finished =====")
     print(f"Total clusters updated: {len(updated_cluster_emb)}")
                                                         # updated_cluster_emb:
@@ -203,6 +203,27 @@ for r in range(global_rounds):
                 # user_emb[u] = cluster_updated_embs[cid]
         Recmodel.embedding_user.weight.data.copy_(user_emb)     # 把更新后的 user embedding 写回模型
         Recmodel.embedding_item.weight.data.copy_(global_item_emb)    # 用 server 端训练后的 item embedding 更新本地模型
+    
+    # 下发在 server 端计算出的 (group,cluster) rating 到各 group
+    group_cluster_server_rating = defaultdict(dict)   
+    for (gid, cid), rating in server_rating.items():
+        group_cluster_server_rating[gid][cid] = rating
+    user_rating_initial_dict = defaultdict(dict)        # gid -> Tensor(n_users, n_items)
+    for gid,Recmodel in group_models.items():
+        user_rating_initial_dict[gid] = torch.zeros(
+            (Recmodel.dataset.n_users, Recmodel.dataset.m_items),
+            device=global_item_emb.device
+        )
+    for cluster_data in cluster_data_list:      # 遍历各 group 的 cluster_data（一对一）
+        gid = cluster_data['group_id']
+        cluster_users = cluster_data['cluster_users']   # group 内：cluster -> users 映射
+        cluster_server_rating = group_cluster_server_rating[gid]   # 该 group 内更新后的 cluster rating
+        for cid, users in cluster_users.items():
+            if cid not in cluster_server_rating:
+                continue
+            for u in users:
+                user_rating_initial_dict[gid][u] = cluster_server_rating[cid]
+
     # group-level local training
     for gid, Recmodel in group_models.items():
         dataset = group_datasets[gid]
@@ -227,7 +248,8 @@ for r in range(global_rounds):
             0,
             w,
             world.config['multicore'],
-            test=1
+            test=1,
+            rating_initial=user_rating_initial_dict[gid]
         )
 cprint("\n================ All Global Rounds Finished ================")
 
