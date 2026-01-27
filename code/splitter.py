@@ -115,10 +115,12 @@ class SubgraphSplitter:
         sub.group_id = gid
         sub.global_users = users
         sub.uid_map = uid_map
+        sub.item_set = self._cal_item_set(sub)
 
         print(
             f"[Group {gid}] "
             f"users={len(users)}, "
+            f"item_set={len(sub.item_set)}, "
             f"train={sub.trainDataSize}, "
             f"val={0 if val_u is None else len(val_u)}, "
             f"test={0 if test_u is None else len(test_u)}"
@@ -153,3 +155,9 @@ class SubgraphSplitter:
 
         local_users = np.array([uid_map[int(u)] for u in users], dtype=np.int64)
         return local_users, items
+    
+    def _cal_item_set(self, subLoader:Loader) -> Dict[int, set]:
+        item_set = set()
+        for items in subLoader.getUserPosItems_Test(np.arange(subLoader.n_users)):
+            item_set.update(items)   # train + val
+        return item_set

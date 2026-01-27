@@ -145,6 +145,20 @@ for dataset in sub_datasets:
             world.config['multicore'],
             test=1        # <<< 用 testDict
         )
+        print("-------- group内部物品的推荐效果 --------")
+        item_mask = torch.zeros(dataset.m_items, dtype=torch.bool)
+        item_mask[list(dataset.item_set)] = True
+        item_mask = item_mask.to(world.device)
+        # 新增评估（仅 sub/group 内物品）
+        Procedure.Test(
+            dataset,
+            Recmodel,
+            group_best_epoch[gid],
+            w,
+            world.config['multicore'],
+            test=1,
+            item_mask=item_mask
+        )
     
     # 缓存模型
     group_models[gid] = Recmodel
@@ -238,7 +252,7 @@ for r in range(global_rounds):
                 neg_k=Neg_k,
                 w=w
             )
-    print(f"------------- [ROUND {r} TEST] ------------")
+    print(f"-------------------------- [ROUND {r} TEST] -------------------------")
     for gid, Recmodel in group_models.items():
         dataset = group_datasets[gid]
         print(f"[ROUND {r} TEST] : Group {gid}")
@@ -251,6 +265,24 @@ for r in range(global_rounds):
             test=1,
             rating_initial=user_rating_initial_dict[gid]
         )
+        # ============================================== 需要时请打开 ==============================================
+        # print(f"-------- Group{gid} 内部物品推荐效果 --------")
+        # item_mask = torch.zeros(dataset.m_items, dtype=torch.bool)
+        # item_mask[list(dataset.item_set)] = True
+        # item_mask = item_mask.to(world.device)
+        # # 新增评估（仅 sub/group 内物品）
+        # Procedure.Test(
+        #     dataset,
+        #     Recmodel,
+        #     0,
+        #     w,
+        #     world.config['multicore'],
+        #     test=1,
+        #     rating_initial=user_rating_initial_dict[gid],
+        #     item_mask=item_mask
+        # )
+        # print("\n")
+        # ============================================== 需要时请打开 ==============================================
 cprint("\n================ All Global Rounds Finished ================")
 
 print("\n================ FINAL TEST ================")

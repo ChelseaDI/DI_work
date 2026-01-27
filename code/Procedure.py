@@ -78,7 +78,7 @@ def test_one_batch(X):
             'ndcg':np.array(ndcg)}
         
             
-def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, rating_initial=None):
+def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, rating_initial=None, item_mask=None):
     if isServer:
         u_batch_size = world.config['server_test_u_batch_size']
         print(f"Server Test: u_batch_size = {u_batch_size}")
@@ -86,6 +86,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
         u_batch_size = world.config['test_u_batch_size']
         print(f"Client Test: u_batch_size = {u_batch_size}")
     # u_batch_size = world.config['test_u_batch_size']
+
     dataset: utils.BasicDataset
     if test==1:
         testDict: dict = dataset.testDict
@@ -94,12 +95,14 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
     Recmodel: model.LightGCN
     # eval mode with no dropout
     Recmodel = Recmodel.eval()
+
     max_K = max(world.topks)
     if multicore == 1:
         pool = multiprocessing.Pool(CORES)
     results = {'precision': np.zeros(len(world.topks)),
                'recall': np.zeros(len(world.topks)),
                'ndcg': np.zeros(len(world.topks))}
+    
     with torch.no_grad():
         users = list(testDict.keys())
         try:
@@ -115,6 +118,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
         total_batch = (len(users) // u_batch_size
                if len(users) % u_batch_size == 0
                else len(users) // u_batch_size + 1)
+        
         for batch_users in utils.minibatch(users, batch_size=u_batch_size):
             if test==1:
                 allPos = dataset.getUserPosItems_Test(batch_users)
@@ -126,9 +130,11 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
             batch_users_gpu = batch_users_gpu.to(world.device)
 
             rating = Recmodel.getUsersRating(batch_users_gpu)       # 获取用户评分预测
-            if rating_initial is not None and not isServer:
-                # print("\n--------- Using cluster initial rating -----------\n")
-                rating += rating_initial[batch_users_gpu]
+            if rating_initial is not None and not isServer:     # 使用所属 cluster 的评分进行微调
+                rating += rating_initial[batch_users_gpu]   
+            if item_mask is not None:           # 局限于group内物品
+                rating[:, ~item_mask] = -(1 << 10)
+
             #rating = rating.cpu()
             # 排除已交互物品
             exclude_index = []
@@ -138,6 +144,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
                 exclude_items.extend(items)
             rating[exclude_index, exclude_items] = -(1<<10)         # 将已交互物品的评分置为负无穷
             _, rating_K = torch.topk(rating, k=max_K)               # 获取Top-K推荐
+
             # 数据转移和清理
             rating = rating.cpu().numpy()
             # aucs = [ 
@@ -147,6 +154,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
             #     ]
             # auc_record.extend(aucs)
             del rating
+
             users_list.append(batch_users)
             rating_list.append(rating_K.cpu())
             groundTrue_list.append(groundTrue)
