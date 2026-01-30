@@ -224,3 +224,34 @@ class LightGCN(BasicModel):
         inner_pro = torch.mul(users_emb, items_emb)     # 逐元素相乘
         gamma     = torch.sum(inner_pro, dim=1)         # u 对 i 的评分
         return gamma
+    
+    def get_cluster_align_loss(self, users):
+        """
+        users: Tensor [batch_size]，local user id
+        return: scalar loss
+        """
+        # 1. 如果没启用 cluster align，直接返回 0
+        if self.cluster_data is None:
+            return torch.tensor(0.0, device=self.embedding_user.weight.device)
+
+        # 2. 拿到 cluster 信息
+        cluster_labels = self.cluster_data["cluster_labels"]   # array-like, size = num_users
+        cluster_embeddings = self.cluster_data["cluster_embeddings"]  # dict: cid -> Tensor
+
+        # 3. 当前 batch 的 user embedding（LightGCN 之后的）
+        all_users_emb, _ = self.computer()
+        users_emb = all_users_emb[users.long()]   # [B, d]
+
+        # 4. 找到每个 user 对应的 cluster embedding
+        user_cluster_ids = cluster_labels[users.cpu().numpy()]  # [B]
+
+        proto_list = []
+        for cid in user_cluster_ids:
+            proto_list.append(cluster_embeddings[cid])
+
+        cluster_proto = torch.stack(proto_list, dim=0).to(users_emb.device)  # [B, d]
+
+        # 5. 对齐 loss（L2，prototype 不回传梯度）
+        loss = torch.mean((users_emb - cluster_proto.detach()) ** 2)
+
+        return loss

@@ -38,11 +38,15 @@ class BPRLoss:
         self.lr = config['lr']
         self.opt = optim.Adam(recmodel.parameters(), lr=self.lr)
 
-    def stageOne(self, users, pos, neg):
+    def stageOne(self, users, pos, neg, isServer=False):
         loss, reg_loss = self.model.bpr_loss(users, pos, neg)
         reg_loss = reg_loss*self.weight_decay
         loss = loss + reg_loss
-
+        if isServer == False:
+            if self.model.cluster_data != None:
+                print("############## cluster_align_loss ##############")
+                cluster_align_loss = self.model.get_cluster_align_loss(users)
+                loss += cluster_align_loss
         self.opt.zero_grad()
         loss.backward()
         self.opt.step()

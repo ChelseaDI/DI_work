@@ -180,6 +180,10 @@ for r in range(global_rounds):
         # clustering
         dataset = group_datasets[gid]
         cluster_data = clustering.run(dataset, Recmodel)
+        if world.config["cluster_align"] == True:       # 注意，这是初次挂载，意味着只有在client端才有 cluster_data，server端无
+            Recmodel.cluster_data = cluster_data
+        else:
+            Recmodel.cluster_data = None    
         cluster_data_list.append(cluster_data)          # [ [group0的clusters], [group1的clusters], [group2的clusters],...]
         # server collecting
         _, item_emb = Recmodel.computer()
@@ -201,21 +205,26 @@ for r in range(global_rounds):
     group_cluster_emb = defaultdict(dict)
     for (gid, cid), emb in updated_cluster_emb.items():
         group_cluster_emb[gid][cid] = emb
+    for gid, Recmodel in group_models.items():      # server 端聚合回传后，更新本地 model 的 cluster emb，用于引入 cluster-user emb 对齐 loss
+        Recmodel.cluster_data['cluster_embeddings'] = group_cluster_emb[gid]
+        print(f"\n############# [Group {gid}] cluster embeddings after server update: #############")
+
     for cluster_data in cluster_data_list:      # 遍历各 group 的 cluster_data（一对一）
         gid = cluster_data['group_id']
         Recmodel = group_models[gid]
         user_emb, _ = Recmodel.computer()
         user_emb = user_emb.clone()
         # 更新
-        cluster_users = cluster_data['cluster_users']   # group 内：cluster -> users 映射
-        cluster_updated_embs = group_cluster_emb[gid]   # 该 group 内更新后的 cluster embedding
-        for cid, users in cluster_users.items():
-            if cid not in cluster_updated_embs:
-                continue
-            for u in users:
-                user_emb[u] = 0.5*user_emb[u] + alpha * cluster_updated_embs[cid]
-                # user_emb[u] = cluster_updated_embs[cid]
-        Recmodel.embedding_user.weight.data.copy_(user_emb)     # 把更新后的 user embedding 写回模型
+        if world.config["cluster_align"] == False:
+            cluster_users = cluster_data['cluster_users']   # group 内：cluster -> users 映射
+            cluster_updated_embs = group_cluster_emb[gid]   # 该 group 内更新后的 cluster embedding
+            for cid, users in cluster_users.items():
+                if cid not in cluster_updated_embs:
+                    continue
+                for u in users:
+                    user_emb[u] = 0.5*user_emb[u] + alpha * cluster_updated_embs[cid]
+                    # user_emb[u] = cluster_updated_embs[cid]
+            Recmodel.embedding_user.weight.data.copy_(user_emb)     # 把更新后的 user embedding 写回模型
         Recmodel.embedding_item.weight.data.copy_(global_item_emb)    # 用 server 端训练后的 item embedding 更新本地模型
     
     # 下发在 server 端计算出的 (group,cluster) rating 到各 group

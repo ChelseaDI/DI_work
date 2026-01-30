@@ -67,6 +67,8 @@ config['server_test_u_batch_size'] = 111
 config['early_stop'] = 50
 config['val_step'] = 5
 
+config["cluster_align"] = True
+
 GPU = torch.cuda.is_available()
 device = torch.device('cuda' if GPU else "cpu")
 CORES = multiprocessing.cpu_count() // 2

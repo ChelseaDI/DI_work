@@ -88,7 +88,8 @@ class UserClustering:
             "n_clusters": self.n_clusters,
             "cluster_users": dict(cluster_users),          # cid -> [local_uid]
             "cluster_embeddings": cluster_embeddings,      # cid -> torch.Tensor
-            "cluster_items": cluster_items                 # cid -> np.ndarray (train only)
+            "cluster_items": cluster_items,                # cid -> np.ndarray (train only)
+            "cluster_labels": cluster_labels               # cluster_labels[u] = 用户 u 所属的 cluster id
         }
 
         return cluster_data
