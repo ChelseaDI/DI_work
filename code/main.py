@@ -180,10 +180,8 @@ for r in range(global_rounds):
         # clustering
         dataset = group_datasets[gid]
         cluster_data = clustering.run(dataset, Recmodel)
-        if world.config["cluster_align"] == True:       # 注意，这是初次挂载，意味着只有在client端才有 cluster_data，server端无
-            Recmodel.cluster_data = cluster_data
-        else:
-            Recmodel.cluster_data = None    
+        if world.config["cluster_align"] == True:       # 注意，这是初次挂载，意味着只有在client端才可能有 cluster_data，server端无
+            Recmodel.cluster_data = cluster_data  
         cluster_data_list.append(cluster_data)          # [ [group0的clusters], [group1的clusters], [group2的clusters],...]
         # server collecting
         _, item_emb = Recmodel.computer()
@@ -205,9 +203,12 @@ for r in range(global_rounds):
     group_cluster_emb = defaultdict(dict)
     for (gid, cid), emb in updated_cluster_emb.items():
         group_cluster_emb[gid][cid] = emb
-    for gid, Recmodel in group_models.items():      # server 端聚合回传后，更新本地 model 的 cluster emb，用于引入 cluster-user emb 对齐 loss
-        Recmodel.cluster_data['cluster_embeddings'] = group_cluster_emb[gid]
-        print(f"\n############# [Group {gid}] cluster embeddings after server update: #############")
+
+    # server 端聚合回传后，更新本地 model 的 cluster emb，用于引入 cluster-user emb 对齐 loss
+    if world.config["cluster_align"] == True:
+        print(f"\n############# update cluster_data for each group #############")
+        for gid, Recmodel in group_models.items():      
+            Recmodel.cluster_data['cluster_embeddings'] = group_cluster_emb[gid]
 
     for cluster_data in cluster_data_list:      # 遍历各 group 的 cluster_data（一对一）
         gid = cluster_data['group_id']
