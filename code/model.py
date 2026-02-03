@@ -255,3 +255,28 @@ class LightGCN(BasicModel):
         loss = torch.mean((users_emb - cluster_proto.detach()) ** 2)
 
         return loss
+    
+    def get_item_align_loss_all(self):
+        """
+        Align local item embeddings with global (server) item embeddings.
+        Return a scalar loss.
+        """
+
+        # 1. 没有 global item embedding，直接不生效
+        if not hasattr(self, "global_item_emb") or self.global_item_emb is None:
+            return torch.tensor(0.0, device=self.embedding_item.weight.device)
+
+        # 2. LightGCN 传播后的 item embedding
+        _, all_items_emb = self.computer()      # [num_items, dim]
+
+        # 3. server 下发的 global item embedding
+        global_item_emb = self.global_item_emb.to(all_items_emb.device)
+
+        # 4. shape sanity check（调试期很有用）
+        assert all_items_emb.shape == global_item_emb.shape, \
+            f"Item emb shape mismatch: local {all_items_emb.shape}, global {global_item_emb.shape}"
+
+        # 5. L2 对齐（teacher 不回传梯度）
+        loss = torch.mean((all_items_emb - global_item_emb.detach()) ** 2)
+
+        return loss

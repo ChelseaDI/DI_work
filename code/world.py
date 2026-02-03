@@ -68,6 +68,9 @@ config['early_stop'] = 50
 config['val_step'] = 5
 
 config["cluster_align"] = True
+config["cluster_align_weight"] = 0.1
+config["item_align"] = True
+config["item_align_weight"] = 0.1
 
 GPU = torch.cuda.is_available()
 device = torch.device('cuda' if GPU else "cpu")

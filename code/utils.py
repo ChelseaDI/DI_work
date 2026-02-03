@@ -44,9 +44,8 @@ class BPRLoss:
         loss = loss + reg_loss
         if isServer == False:
             if world.config["cluster_align"] == True:
-                print("############## adding cluster_align_loss ##############")
                 cluster_align_loss = self.model.get_cluster_align_loss(users)
-                loss += cluster_align_loss
+                loss += world.config["cluster_align_weight"] * cluster_align_loss
         self.opt.zero_grad()
         loss.backward()
         self.opt.step()

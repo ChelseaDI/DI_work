@@ -57,6 +57,12 @@ def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=N
         aver_loss += cri
         if world.tensorboard:
             w.add_scalar(f'BPRLoss/BPR', cri, epoch * int(len(users) / world.config['bpr_batch_size']) + batch_i)
+    # 引入 item-align loss
+    if isServer == False:
+        if world.config["item_align"]:
+            item_align_loss = Recmodel.get_item_align_loss_all()
+            aver_loss += world.config["item_align_weight"] * item_align_loss
+            print(f"--- added item_align_loss: {item_align_loss:.4f}")
     aver_loss = aver_loss / total_batch
     time_info = timer.dict()
     timer.zero()

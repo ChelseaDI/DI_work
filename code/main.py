@@ -199,6 +199,11 @@ for r in range(global_rounds):
                                                         # updated_cluster_emb:
                                                             # key   = (group_id, cluster_id)
                                                             # value = Tensor(dim,)
+    # group model 挂载全局 item embedding 用于计算 item-align loss
+    if world.config["item_align"] == True: 
+        for gid, Recmodel in group_models.items(): 
+            Recmodel.global_item_emb = global_item_emb
+    
     # 下发在 server 端更新后的 (group,cluster) embedding 到各 group
     group_cluster_emb = defaultdict(dict)
     for (gid, cid), emb in updated_cluster_emb.items():
@@ -276,22 +281,22 @@ for r in range(global_rounds):
             rating_initial=user_rating_initial_dict[gid]
         )
         # ============================================== 需要时请打开 ==============================================
-        # print(f"-------- Group{gid} 内部物品推荐效果 --------")
-        # item_mask = torch.zeros(dataset.m_items, dtype=torch.bool)
-        # item_mask[list(dataset.item_set)] = True
-        # item_mask = item_mask.to(world.device)
-        # # 新增评估（仅 sub/group 内物品）
-        # Procedure.Test(
-        #     dataset,
-        #     Recmodel,
-        #     0,
-        #     w,
-        #     world.config['multicore'],
-        #     test=1,
-        #     rating_initial=user_rating_initial_dict[gid],
-        #     item_mask=item_mask
-        # )
-        # print("\n")
+        print(f"-------- Group{gid} 内部物品推荐效果 --------")
+        item_mask = torch.zeros(dataset.m_items, dtype=torch.bool)
+        item_mask[list(dataset.item_set)] = True
+        item_mask = item_mask.to(world.device)
+        # 新增评估（仅 sub/group 内物品）
+        Procedure.Test(
+            dataset,
+            Recmodel,
+            0,
+            w,
+            world.config['multicore'],
+            test=1,
+            rating_initial=user_rating_initial_dict[gid],
+            item_mask=item_mask
+        )
+        print("\n")
         # ============================================== 需要时请打开 ==============================================
 cprint("\n================ All Global Rounds Finished ================")
 
