@@ -237,21 +237,6 @@ for r in range(global_rounds):
     group_cluster_server_rating = defaultdict(dict)   
     for (gid, cid), rating in server_rating.items():
         group_cluster_server_rating[gid][cid] = rating
-    user_rating_initial_dict = defaultdict(dict)        # gid -> Tensor(n_users, n_items)
-    for gid,Recmodel in group_models.items():
-        user_rating_initial_dict[gid] = torch.zeros(
-            (Recmodel.dataset.n_users, Recmodel.dataset.m_items),
-            device=global_item_emb.device
-        )
-    for cluster_data in cluster_data_list:      # 遍历各 group 的 cluster_data（一对一）
-        gid = cluster_data['group_id']
-        cluster_users = cluster_data['cluster_users']   # group 内：cluster -> users 映射
-        cluster_server_rating = group_cluster_server_rating[gid]   # 该 group 内更新后的 cluster rating
-        for cid, users in cluster_users.items():
-            if cid not in cluster_server_rating:
-                continue
-            for u in users:
-                user_rating_initial_dict[gid][u] = cluster_server_rating[cid]
 
     # group-level local training
     for gid, Recmodel in group_models.items():
@@ -269,6 +254,7 @@ for r in range(global_rounds):
             )
     print(f"-------------------------- [ROUND {r} TEST] -------------------------")
     for gid, Recmodel in group_models.items():
+        cluster_server_rating = group_cluster_server_rating[gid]   # 该 group 内更新后的 cluster rating
         dataset = group_datasets[gid]
         print(f"[ROUND {r} TEST] : Group {gid}")
         Procedure.Test(
@@ -278,7 +264,7 @@ for r in range(global_rounds):
             w,
             world.config['multicore'],
             test=1,
-            rating_initial=user_rating_initial_dict[gid]
+            rating_initial=cluster_server_rating
         )
         # ============================================== 需要时请打开 ==============================================
         print(f"-------- Group{gid} 内部物品推荐效果 --------")
@@ -293,7 +279,7 @@ for r in range(global_rounds):
             w,
             world.config['multicore'],
             test=1,
-            rating_initial=user_rating_initial_dict[gid],
+            rating_initial=cluster_server_rating,
             item_mask=item_mask
         )
         print("\n")
