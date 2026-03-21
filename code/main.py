@@ -179,9 +179,8 @@ for r in range(global_rounds):
     for gid, Recmodel in group_models.items():
         # clustering
         dataset = group_datasets[gid]
-        cluster_data = clustering.run(dataset, Recmodel)
-        if world.config["cluster_align"] == True:       # 注意，这是初次挂载，意味着只有在client端才可能有 cluster_data，server端无
-            Recmodel.cluster_data = cluster_data  
+        cluster_data = clustering.run(dataset, Recmodel) 
+        Recmodel.cluster_data = cluster_data            # 注意，这是初次挂载，意味着只有在client端才可能有 cluster_data，server端无
         cluster_data_list.append(cluster_data)          # [ [group0的clusters], [group1的clusters], [group2的clusters],...]
         # server collecting
         _, item_emb = Recmodel.computer()
