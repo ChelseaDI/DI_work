@@ -42,18 +42,22 @@ def load_interactions(dataset_name, data_path):
             m_item = max(m_item, max(items))
 
     with open(test_file) as f:
+        # ppp = 1
         for line in f:
             if not line.strip():
                 continue
             parts = line.strip().split()
             u = int(parts[0])
+            # print(f"行数：{ppp}\n")
+            # ppp = ppp + 1
             items = list(map(int, parts[1:]))
 
             test_user.extend([u] * len(items))
             test_item.extend(items)
 
             n_user = max(n_user, u)
-            m_item = max(m_item, max(items))
+            if items:
+                m_item = max(m_item, max(items))
 
     return (
         train_user,
