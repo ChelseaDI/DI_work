@@ -138,9 +138,15 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0, test=1, isServer=False, 
             rating = Recmodel.getUsersRating(batch_users_gpu)       # 获取用户评分预测
             if rating_initial is not None and not isServer:     # 使用所属 cluster 的评分进行微调
                 cluster_labels = Recmodel.cluster_data['cluster_labels']    # 只有客户端才有，服务器端模型无cluster_data
-                cluster_labels_tensor = torch.Tensor(cluster_labels).to(world.device)
+                cluster_labels_tensor = torch.tensor(
+                    cluster_labels, dtype=torch.long
+                ).to(world.device)
                 batch_cids = cluster_labels_tensor[batch_users_gpu]        # batch_users_gpu一一对应的cid
-                rating += rating_initial[batch_cids]   
+                ratings = []
+                for cid in batch_cids:
+                    cid = int(cid.item())
+                    ratings.append(rating_initial[cid])
+                rating += torch.stack(ratings)   
             if item_mask is not None:           # 局限于group内物品
                 rating[:, ~item_mask] = -(1 << 10)
 
