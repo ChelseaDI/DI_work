@@ -342,4 +342,10 @@ class ServerGraph:
             for key, rating in zip(cluster_keys, rating_out)
         }
 
+        # # 为了显存唉
+        # del server_recmodel
+        # del server_dataset
+        # del bpr
+        # torch.cuda.empty_cache()
+
         return updated_cluster_emb, updated_item_emb, server_rating

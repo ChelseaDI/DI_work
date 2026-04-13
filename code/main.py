@@ -228,6 +228,7 @@ for r in range(global_rounds):
                     continue
                 for u in users:
                     user_emb[u] = 0.5*user_emb[u] + alpha * cluster_updated_embs[cid]
+                    # user_emb[u] = user_emb[u]     # 用于eu消融实验
                     # user_emb[u] = cluster_updated_embs[cid]
             Recmodel.embedding_user.weight.data.copy_(user_emb)     # 把更新后的 user embedding 写回模型
         Recmodel.embedding_item.weight.data.copy_(global_item_emb)    # 用 server 端训练后的 item embedding 更新本地模型
@@ -283,6 +284,14 @@ for r in range(global_rounds):
         )
         print("\n")
         # ============================================== 需要时请打开 ==============================================
+
+    # # 手动清理显存 貌似不顶用
+    # del server_rating
+    # del group_cluster_server_rating
+    # del updated_cluster_emb
+    # del global_item_emb
+
+    torch.cuda.empty_cache()
 cprint("\n================ All Global Rounds Finished ================")
 
 print("\n================ FINAL TEST ================")
